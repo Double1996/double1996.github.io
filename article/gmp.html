@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+  <head>
+    <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="X-UA-Compatible" content="ie=edge" />
+<link rel="stylesheet" href="/_assets/main.css" />
+
+    <title>GMP 调度器 - double program world</title>
+  </head>
+  <body>
+    <div class="main">
+      <nav class="navigation">
+        <a href="/">double program world</a>
+      </nav>
+      <article>
+        <header>
+          <h1 class="article-title">GMP 调度器</h1>
+          <div class="article-info">
+            <div>
+              <span
+                >Created At：<time datetime="1614653199825"
+                  >2021-03-02 10:46</time
+                ></span
+              >
+              <span
+                >Updated At：<time datetime="1638322918102"
+                  >2021-12-01 09:41</time
+                ></span
+              >
+            </div>
+            
+            <div>
+              Keywords: 
+              <span class="keyword">go_runtime</span>
+              
+              <span class="keyword">blog</span>
+              
+              <span class="keyword">大厂之路</span>
+              
+            </div>
+            
+          </div>
+        </header>
+        <div class="article-content markdown-body"><nav class="table-of-contents"><ul><li><a href="#linux-进程-线程-协程">Linux  进程 线程 协程</a><ul><li><a href="#进程">进程</a></li><li><a href="#线程">线程</a></li><li><a href="#协程">协程</a></li><li><a href="#go-scheder-发展历史">Go scheder 发展历史</a></li><li><a href="#goroutine-与-posix-thread-区别">goroutine 与 posix thread 区别</a><ul><li><a href="#内存消耗">内存消耗</a></li><li><a href="#创建和销毁">创建和销毁</a></li><li><a href="#切换">切换</a></li><li><a href="#复杂度">复杂度</a></li></ul></li><li><a href="#gmp-概念">GMP 概念</a></li><li><a href="#m-是如何找工作的">M 是如何找工作的</a></li><li><a href="#goroutine-调度时机">goroutine 调度时机</a></li><li><a href="#network-poller">Network Poller</a></li><li><a href="#rece">Rece</a></li></ul></li></ul></nav><blockquote>
+<p>对于 Go 自身而言，它的设计和实现直接牵动了整个 Go 运行时的其他组件，是与用户态代码直接打交道的部分； 对于 Go 用户而言，调度器将极其复杂的运行时机制隐藏在了一个简单的关键字 go 之下。 为了保证高性能，调度器必须有效的利用计算的并行性和局部性原理；为了保证用户态的简洁， 调度器必须高效的对调度用户态不可见的网络轮训器、垃圾回收器进行调度；为了保证代码 执行的正确性，还必须严格的的实现用户态代码的内存顺序等等。 总而言之，调度器的设计直接决定了 Go 运行时源码的表现形式</p>
+</blockquote>
+<h1 id="linux-进程-线程-协程">Linux  进程 线程 协程</h1>
+<h2 id="进程">进程</h2>
+<blockquote>
+<p>一般来说，进程是 操作系统的 最小的 分配单元，</p>
+</blockquote>
+<h2 id="线程">线程</h2>
+<blockquote>
+<p>进程是 操作系统中 最小的 执行的单元，多个的 线程 可以在</p>
+</blockquote>
+<h2 id="协程">协程</h2>
+<hr />
+<h2 id="go-scheder-发展历史">Go scheder 发展历史</h2>
+<ol>
+<li>
+<p>单线程调度器 · 0.x</p>
+<ul>
+<li>只包含 40多行代码</li>
+<li>程序中只能存在一个活跃线程，由 G-M 模型组成</li>
+</ul>
+</li>
+<li>
+<p>多线程调度 1.0</p>
+<ul>
+<li>允许多线程的程序</li>
+<li>全局锁导致竞争严重</li>
+</ul>
+</li>
+<li>
+<p>任务窃取调度器 1.1</p>
+<ul>
+<li>引入处理器P, 构成了 GMP 模型</li>
+<li>在处理器 P 的基础上实现了基于工作窃取的调度器；</li>
+<li>时间过长的垃圾回收（Stop-the-world，STW）会导致程序长时间无法工作；</li>
+</ul>
+</li>
+<li>
+<p>抢占式调度器 1.2 -至今</p>
+<ul>
+<li>通过编译器在函数调用时插入抢占检查指令，在函数调用时检查当前 Goroutine 是否发起了抢占请求，实现基于协作的抢占式调度；</li>
+<li>Goroutine 可能会因为垃圾回收和循环长时间占用资源导致程序暂停</li>
+</ul>
+</li>
+<li>
+<p>基于信号的抢占式调度器 - 1.14 ~ 至今</p>
+</li>
+</ol>
+<h2 id="goroutine-与-posix-thread-区别">goroutine 与 posix thread 区别</h2>
+<p>可以从三个角度来说明： 1. 内存消耗， 2. 创建与销毁  3上下文切换 4 复杂度</p>
+<h3 id="内存消耗">内存消耗</h3>
+<p>创建一个 groutine 的栈内存消耗大概在 2KB 左右，实际的运行过程中，如果上下文空间不够的话，会进行扩容。</p>
+<p>创建一个 thread 的栈内存消耗 在 1MB 左右， 而且还需要一个被称为 “a guard page” 的区域用于和其他 thread 的栈空间进行隔离。</p>
+<p>所以对于 groutine 来说，构建 Http server ，创建一个请求的 groutine 用来处理是 十分轻量的事情，而如果使用线程来作为并发的语言构建来说，例如 Java , 每一个请求对应一个 线程非常的浪费. 经常会 出现 OOM 一种情况。</p>
+<h3 id="创建和销毁">创建和销毁</h3>
+<p>Thread 创建和销毁 都会有着 巨大的消耗，因为 要和操作系统打交道，是内核级别的，例如 Java 当中 通常的 办法是 <strong>设计一个 线程池子</strong>。 而 goroutime 是 由 go runtime 负责管理， 创建和销毁消耗特别小， 属于用户级别的。</p>
+<h3 id="切换">切换</h3>
+<p>thread 切换的是否，需要各种寄存器来保存 上下文，一边将来的进行恢复
+而 groutine 只需要保存三个寄存器 Program Counter, Stack Pointer and BP。</p>
+<p>一般而言，线程切换会消耗 1000-1500 纳秒，一个纳秒平均可以执行 12-18 条指令。所以由于线程切换，执行指令的条数会减少 12000-18000。</p>
+<p>Goroutine 的切换约为 200 ns，相当于 2400-3600 条指令。</p>
+<p>因此，goroutines 切换成本比 threads 要小得多。</p>
+<h3 id="复杂度">复杂度</h3>
+<h2 id="gmp-概念">GMP 概念</h2>
+<p>G: 主要保存 gouroutine 一些状态和信息, 以及CPU 相关的寄存器的值。 例如IP 的寄存器，以及轮到本 goroutine执行的时候，CPU 需要从那条指令开始执行。</p>
+<p>当 goroutine 被调离 CPU 时，调度器负责把 CPU 寄存器的值保存在 g 对象的成员变量之中。当 goroutine 被调度起来运行时，调度器又负责把 g 对象的成员变量所保存的寄存器值恢复到 CPU 的寄存器。</p>
+<p>M: 代表这一个 工作线程，或者说系统线程。 G 需要调度到M 才能运行，M 是真正工作的人。 结构体M 保存了自身使用的栈信息，当前正在M 上执行 G 与 之绑定的 P 相关信息。</p>
+<p>M 没有工作可以做的时候， 当它再休眠前，会“自旋”地来找工作， 检查全局的队列， 查看 network poller, 试图执行 gc 任务，或者"偷"工作</p>
+<p>P: 为 M 提供执行的上下文， 保存 M 执行 G 的一些资源， 例如本地可运行的 G 队列，memeory cache 等等 。 一个 M 只有绑定 P 才能执行 G， 当 M 被阻塞时， 整个 P 会被传递给 M ， 或者说整个P 被接管。</p>
+<p>GPM 三足鼎力，共同成就 Go scheduler。G 需要在 M 上才能运行，M 依赖 P 提供的资源，P 则持有待运行的 G。你中有我，我中有你。</p>
+<p>M 只有自旋和非自旋两种状态。自旋的时候，会努力找工作；找不到的时候会进入非自旋状态，之后会休眠，直到有工作需要处理时，被其他工作线程唤醒，又进入自旋状态。</p>
+<h2 id="m-是如何找工作的">M 是如何找工作的</h2>
+<p>本地队列 —— 全局队列 —— 其他 P steal 窃取</p>
+<p>P 是如何窃取的</p>
+<h2 id="goroutine-调度时机">goroutine 调度时机</h2>
+<p>在四种情况下，goruntine 会发生调度，但不是会 100% 发生调度</p>
+<h2 id="network-poller">Network Poller</h2>
+<h2 id="rece">Rece</h2>
+<ul>
+<li><a title="https://www.qcrao.com/2019/09/02/dive-into-go-scheduler/" href="https://www.qcrao.com/2019/09/02/dive-into-go-scheduler/">码农桃花源</a></li>
+</ul>
+</div>
+      </article>
+    </div>
+  </body>
+</html>
